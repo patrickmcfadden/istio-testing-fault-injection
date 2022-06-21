@@ -1,0 +1,12 @@
+{
+  "name": "gauge-taiko-template",
+  "description": "Starter template for writing JavaScript tests for Gauge",
+  "scripts": {
+    "test": "gauge run --tags '!Error' specs/",
+    "test-error": "gauge run --tags 'Error' specs/"
+  },
+  "dependencies": {
+    "taiko": "latest",
+    "@getgauge/cli": "latest"
+  }
+}

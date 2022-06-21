@@ -1,24 +1,87 @@
 version: 2.1
 jobs:
-  build:
+  run-tests:
     docker:
-      - image: docker:stable
+      - image: cimg/node:18.4.0-browsers
     steps:
+      - checkout
+      - prepare-tools
+      - restore_cache:
+          keys:
+            # Find a cache corresponding to this specific package-lock.json checksum
+            # when this file is changed, this key will fail
+            - v1-npm-deps-{{ checksum "package-lock.json" }}
+            # Find the most recently generated cache used from any branch
+            - v1-npm-deps-
       - run:
-          command: echo "here goes your build steps"
+          command: npm install
+      - save_cache:
+          key: v1-npm-deps-{{ checksum "package-lock.json" }}
+          paths:
+            - node_modules
+      - run:
+          name: Run Gauge
+          command: npm run test
+          environment:
+            headless_chrome: true
+      - run:
+          name: Apply Error Testing Configuration
+          command: ./kubectl apply -f manifest-errors/
+      - run:
+          name: Run Gauge Error Tests
+          command: npm run test-error
+          environment:
+            headless_chrome: true
+      - run:
+          name: Cleanup Error Testing Configuration
+          command: ./kubectl delete -f manifest-errors/
 
-  tests:
+  deploy-application:
     docker:
-      - image: docker:stable
+      - image: google/cloud-sdk
     steps:
+      - checkout
       - run:
-          command: echo "here goes your tests steps"
+          name: Auth Google and setup config
+          command: |
+            echo $GOOGLE_CREDENTIALS | gcloud auth activate-service-account --key-file=-
+            gcloud --quiet config set project ${GOOGLE_PROJECT_ID}
+            gcloud --quiet config set compute/zone ${GOOGLE_COMPUTE_ZONE}
+            gcloud container clusters get-credentials ${GOOGLE_PROJECT_ID}-gke --zone ${GOOGLE_COMPUTE_ZONE}
+      - run:
+          name: Deploy Application
+          command: |
+            kubectl label namespace default istio-injection=enabled --overwrite=true
+            kubectl apply -f manifests/
 
 workflows:
   version: 2
   build-test-deploy:
     jobs:
-      - build
-      - tests:
+      - deploy-application
+      - run-tests:
           requires:
-            - build
+            - deploy-application
+
+commands:
+  prepare-tools:
+    steps:
+      - run:
+          name: Install gcloud CLI
+          command: |
+            sudo apt-get install apt-transport-https ca-certificates gnupg
+            echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+            curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
+            sudo apt-get update && sudo apt-get install google-cloud-cli
+      - run:
+          name: Install kubectl
+          command: |
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x ./kubectl
+      - run:
+          name: Auth Google and setup config
+          command: |
+            echo $GOOGLE_CREDENTIALS | gcloud auth activate-service-account --key-file=-
+            gcloud --quiet config set project ${GOOGLE_PROJECT_ID}
+            gcloud --quiet config set compute/zone ${GOOGLE_COMPUTE_ZONE}
+            gcloud container clusters get-credentials ${GOOGLE_PROJECT_ID}-gke --zone ${GOOGLE_COMPUTE_ZONE}
